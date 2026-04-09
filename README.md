@@ -1,184 +1,183 @@
-# 03_03 Create a Service account for Deployments
+# 03_04 Continuous Deployment for Lambda Functions
 
-When deploying to platforms outside of GitHub, workflows need a secure way to authenticate and access external services.
+This lesson extends our existing Python integration workflow into a complete CI/CD pipeline that automatically deploys an application to Amazon Web Services using AWS Lambda.
 
-A **service account** provides this access. It isn’t tied to a specific person; instead, it represents an identity that GitHub Actions uses to deploy artifacts on our behalf.
+```mermaid
+flowchart LR
+  A[Push to main] --> B[Integration Lint + Test Suite]
+  B -->|Pass| C[Package app as .zip and save artifact]
+  C --> E[Deploy to AWS Lambda Staging environment]
+  E --> F{Approve Production Deployment?}
+  F -->|Yes| G[Deploy to AWS Lambda Production environment]
+  F -->|No| H[End the workflow]
+```
 
-Service accounts are granted **only the permissions required for deployment**, reducing risk and preventing access to unnecessary services.
+## Integration (CI)
 
-To use a service account:
+- Reuses the existing integration workflow
+- Lints the code and runs the test suite
+- Must succeed before delivery or deployment can run
 
-- Credentials are created and scoped to the required permissions
-- Those credentials are stored securely as encrypted secrets
-- Workflows access the credentials at runtime to authenticate and deploy
+## Delivery
 
-This course will use **Amazon Web Services (AWS)** as the deployment target.
-AWS offers a free tier that allows you to deploy applications at no cost for a limited time, making it ideal for hands-on learning.
+- Adds a delivery job to the pipeline
+- Packages the application into a ZIP archive
+- Publishes the ZIP as a workflow artifact
 
-> [!TIP]
-> If you don’t already have one, I encourage you to create your own, personal AWS account that you can use to follow along.
+## Deployment
+
+- Adds a deployment job that consumes the artifact
+- Deploys the application to AWS Lambda
+- Build and deploy steps remain clearly separated
+
+## Environments
+
+- **Staging**: Automatically deploys on every successful push to `main`
+- **Production**: Requires manual approval enforced using environment protection rules
 
 ## References
 
 | Reference | Description |
 |----------|-------------|
-| [Free Cloud Computing Services - AWS Free Tier](https://aws.amazon.com/free/) | AWS Free Tier information for cloud computing services |
-| [OpenID Connect (OIDC)](https://docs.github.com/en/actions/concepts/security/openid-connect) | GitHub Actions documentation for using OpenID Connect for secure authentication |
+| [Lambda Project Details](./LAMBDA_PROJECT_DETAILS.md) | Documentation for the Lambda project used in this lesson |
 
-## Lab: Provision a Service Account and Deployment Targets; Configure GitHub Actions for AWS Deployments
+## Lab: Continuous Deployment to AWS Lambda with GitHub Actions
 
-In this lab, you will:
+In this lab, you’ll complete a full CI/CD pipeline that deploys a Python application to **AWS Lambda** using **GitHub Actions**.
 
-1. Deploy a CloudFormation stack that creates:
+You’ll reuse an existing integration workflow, package the application as an artifact, and deploy it automatically to a staging environment with an approval gate for production.
 
-   - A service account (IAM role for GitHub Actions)
-   - Lambda functions representing staging and production environments
+### Prerequisites
 
-2. Configure GitHub repository and environment variables using the CloudFormation outputs
+Before starting this lab, you should have:
 
-These steps prepare your repository so GitHub Actions can [authenticate with AWS using OIDC](https://docs.github.com/en/actions/concepts/security/openid-connect) during the deployment.
+- Completed the previous lesson and have the **exercise files**
+- An **AWS account** with a CloudFormation stack already deployed
+- A **GitHub repository** where you can configure variables and workflows
 
-### Part 1: Deploy the CloudFormation Stack
+### Step 1: Verify Lambda Environments
 
-1. Log in to your AWS account and navigate to the **CloudFormation** console.
-2. Select **Create stack**.
-3. Choose **Upload a template file**, then select **Choose file**.
-4. Upload the CloudFormation template provided in the exercise files:
+Using the resources created earlier in the course, confirm that two Lambda environments exist:
 
-   - `service-account-cloudformation-template.yml`
+- **Staging Lambda function**
+- **Production Lambda function**
 
-5. Select **Next**.
-6. Enter a stack name.  ie:
+At this point, both functions are placeholders and do not yet contain the application code. These functions will be updated by the deployment workflow later in the lab.
 
-   - `lambda-application-stack`
+### Step 2: Configure Repository Variables
 
-7. Enter the GitHub repository name where your code will live.
+Confirm your repository so workflows can authenticate with **Amazon Web Services**.
 
-   - Use the format:
+> [!TIP]
+> If your repository is not already configured to authenticate with AWS, please complete the previous lesson.
 
-     ```bash
-     GITHUB_USER_NAME/GITHUB_REPO_NAME
-     ```
+1. Open your GitHub repository settings.
+2. Select **Secrets and variables** then select **Actions**.
+3. Select the **Variables** tab.
+4. Confirm that **Production** and **Staging** environments variables are in place for:
 
-     Example:
+   - `FUNCTION_NAME`
+   - `URL`
 
-     ```bash
-     automate6500/lambda-application
-     ```
+5. Confirm that **Repository variables** are in place for:
 
-   > ⚠️ This value is critical.
-   > If deployments fail later, this is the first setting to verify.
+   - `AWS_REGION`
+   - `AWS_ROLE_ARN`
 
-8. Select **Next**.
-9. On the **Stack options** page, keep all defaults and scroll to the bottom.
-10. Acknowledge that CloudFormation may create IAM resources.
-11. Select **Next**, review the configuration, then select **Submit**.
-12. Wait for the stack to complete successfully.
-13. Once complete, open the **Outputs** tab.
+These values will be referenced by GitHub Actions during deployment.
 
-You’ll use these output values in the next section, so keep this page open.
+### Step 3: Upload Exercise Files and Workflows
 
-### Part 2: Configure GitHub Environments and Variables
+1. Upload the application code from the exercise files into the repository.
+2. Move the workflow files into the `.github/workflows` directory.
 
-#### 2.1 Create the Staging Environment
+> [!IMPORTANT]
+> Move the **integration workflow first**.  This prevents the deployment workflow from triggering and failing due to a missing dependency.
 
-1. Return to the **Environments** page.
-2. Select **New environment**.
-3. Name the environment:
+### Step 4: Review the Integration Workflow
 
-   ```bash
-   Staging
-   ```
+Open the integration workflow file.  This workflow is responsible for linting and testing the application.
 
-   > ⚠️ Name the environment **Staging** with a capital **S**
-   > If deployments fail later, check this setting.
+Note the characteristics:
 
-4. Select **Configure environment**.
-5. Scroll to **Environment variables** and select **Add environment variable**.
-6. Add the following variable:
+- Includes a `workflow_call` trigger for reuse
+- Includes a `push` trigger that **ignores the `main` branch**
 
-   - **Name:** `FUNCTION_NAME`
-   - **Value:** Copy the value from the CloudFormation output
-     `StagingFunctionName`
+Why this matters:
 
-7. Select **Add variable**.
-8. Add another environment variable:
+- Prevents the integration workflow from running twice on pushes to `main`
+- Avoids duplicate runs when called by the deployment workflow
 
-   - **Name:** `URL`
-   - **Value:** Copy the link address from the CloudFormation output
-     `StagingURL`
+### Step 5: Review the Deployment Workflow
 
-9. Select **Add variable**.
+Open the deployment workflow file and note the key sections:
 
-#### 2.2 Create the Production Environment
+| Section | Description |
+|---------|-------------|
+| **Concurrency configuration** | Ensures only one deployment runs at a time |
+| **Integration job** | Calls the integration workflow to reuse linting and testing logic |
+| **Artifact packaging** | Packages the application code and uploads a ZIP file as a workflow artifact |
+| **Staging deployment job** | Automatically deploys after integration succeeds |
+| **Production deployment job** | Requires manual approval; uses the same artifact created earlier |
 
-1. Open your GitHub repository in a new browser tab.
-2. Select **Settings**.
-3. Select **Environments**.
-4. Select **New environment**.
-5. Name the environment:
+Both deployment jobs:
 
-   ```bash
-   Production
-   ```
+- Configure AWS credentials using the service account
+- Download the artifact
+- Deploy the application to AWS Lambda
 
-   > ⚠️ Name the environment **Production** with a capital **P**
-   > If deployments fail later, check this setting.
+### Step 6: Run the Deployment Workflow
 
-6. Select **Configure environment**.
-7. Add the **Deployment protection rule**. Check the box next to **Required reviewers**
-8. Search for and select your GitHub username as a reviewer.
-9. Select **Save protection rules**
-10. Scroll to **Environment variables** and select **Add environment variable**.
-11. Add the following variable:
+1. Open the **Actions** tab in your repository.
+2. Select the deployment workflow.
+3. Choose **Run workflow** to start a new run.
 
-     - **Name:** `FUNCTION_NAME`
-     - **Value:** Copy the value from the CloudFormation output
-     `ProductionFunctionName`
+Observe the workflow as it:
 
-12. Select **Add variable**.
-13. Add another environment variable:
+- Runs integration
+- Packages the application
+- Deploys automatically to **Staging**
 
-    - **Name:** `URL`
-    - **Value:** Copy the link address from the CloudFormation output
-      `ProductionURL`
+### Step 7: Verify the Staging Deployment
 
-14. Select **Add variable**.
+Once the workflow reaches the production approval step:
 
-Both environments are now configured with environment-specific values.
+1. Open the staging environment.
+2. Reload the page to confirm the new version is live.
+3. Perform any validation or testing needed to confirm the deployment is successful.
 
-### Part 3: Add Repository-Level Variables
+This is the quality checkpoint before production deployment.
 
-Some variables are shared across all environments and should be added at the repository level.
+### Step 8: Approve and Deploy to Production
 
-1. From the repository **Settings** page, select **Secrets and variables**, then **Actions**.
-2. Select the **Variables** tab.
-3. Select **New repository variable**.
-4. Add the following variable:
+1. Return to the workflow run.
+2. Select **Review deployments**.
+3. Check the box next to **Production**.
+4. Add a comment (for example: *Looks good to me!*). 😎
+5. Select **Approve and deploy**.
 
-   - **Name:** `AWS_REGION`
-   - **Value:** The AWS region where your CloudFormation stack was deployed
+Wait for the production job to complete.
 
-5. Select **Add variable**.
-6. Select **New repository variable** again.
-7. Add the following variable:
+### Step 9: Confirm Production Deployment
 
-   - **Name:** `AWS_ROLE_ARN`
-   - **Value:** Copy the value from the CloudFormation output for the GitHub Actions role ARN
+Once the workflow finishes:
 
-8. Select **Add variable**.
+- Verify that the production Lambda function has been updated successfully
+- Confirm the application is running as expected
 
-### Lab Complete
+## Lab Complete
 
-After completing the steps for this lab, you should have:
+After completing the steps for this lab, you should have in place:
 
-- Deployed the AWS resources needed for deployment
-- Configured staging and production environments in GitHub
-- Configured repository variables for all environments to access
+- Continuous deployment to **Staging**
+- A protected deployment to **Production**
+- Artifact-based delivery using GitHub Actions
+- Environment-level approval gates
 
-In the next step, you’ll add the application code to the repository and use GitHub Actions to deploy the Lambda functions.
+> [!TIP]
+> If you’re following along, update the code and push changes to your repository to see the continuous deployment behavior in action.  Maybe even push some bad code to see how the workflow responds to failures.
 
 <!-- FooterStart -->
 ---
-[← 03_02 Continuous Deployment for Github Pages](../03_02_cd_for_github_pages/README.md) | [03_04 Continuous Deployment for Lambda Functions →](../03_04_cd_for_lambda/README.md)
+[← 03_03 Create a Service account for Deployments](../03_03_service_account/README.md) | [03_05 Continuous Deployment for Infrastructure as Code →](../03_05_cd_for_iac/README.md)
 <!-- FooterEnd -->
